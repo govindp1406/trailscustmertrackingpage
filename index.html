@@ -1,1 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>GURU Delivery - Live Tracking</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet & Routing Machine -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+    
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
 
+    <style>
+        #map { height: 100%; width: 100%; z-index: 10; }
+        
+        /* Hide the text directions box from routing machine */
+        .leaflet-routing-container { display: none !important; }
+
+        .delivery-marker {
+            display: flex; align-items: center; justify-content: center; 
+            color: #1d4ed8; /* Blue for Bike */
+            transition: all 0.3s ease;
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+        }
+        .customer-marker {
+            display: flex; align-items: center; justify-content: center; 
+            color: #047857; /* Green for House */
+            filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.3));
+        }
+        
+        @keyframes marquee { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+        .animate-marquee { display: inline-block; white-space: nowrap; animation: marquee 25s linear infinite; }
+        .spinning { animation: spin 0.8s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes slowBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .animate-slow-blink { animation: slowBlink 3s ease-in-out infinite; }
+
+        /* Ensure clearance above mobile system buttons */
+        .safe-pb { padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 24px)) !important; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm z-30 relative px-4 py-3 flex items-center justify-between border-b border-gray-100">
+        <div class="flex items-center gap-2">
+            <div class="bg-blue-600 text-white p-1.5 rounded shadow-sm">
+                <i class="ph-bold ph-package text-lg"></i>
+            </div>
+            <h1 class="text-lg font-bold text-gray-900 tracking-tight">GURU Delivery</h1>
+        </div>
+        <div id="authStatus" class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Connecting...</div>
+    </header>
+
+    <!-- Announcement Bar -->
+    <div class="bg-amber-50 border-b border-amber-100 overflow-hidden relative w-full py-2 z-30 flex items-center shadow-sm">
+        <p class="animate-marquee text-xs font-semibold text-amber-800">
+            <i class="ph-fill ph-warning-circle align-middle mr-1"></i> Our delivery partners handle multiple deliveries. Your order will be delivered as per the optimized route.
+        </p>
+    </div>
+
+    <!-- Main Map & Bottom Sheet -->
+    <main class="flex-1 relative flex flex-col">
+        <div class="absolute inset-0 z-10"><div id="map"></div></div>
+
+        <div class="absolute bottom-0 left-0 right-0 z-20 pointer-events-auto bg-white rounded-t-3xl shadow-[0_-10px_40px_rgba(0,0,0,0.15)] border-t border-gray-100">
+            <div class="w-full md:max-w-md mx-auto px-5 pt-2 safe-pb relative space-y-2">
+                
+                <button id="instant-refresh-btn" class="absolute -top-16 right-6 w-12 h-12 bg-red-600 text-white rounded-full flex items-center justify-center shadow-lg border-4 border-white">
+                    <i id="refresh-icon" class="ph-bold ph-crosshair text-xl"></i>
+                </button>
+
+                <!-- Section 1: Dynamic Customer Info & ETA -->
+                <div class="bg-gray-50 rounded-2xl p-3 flex justify-between items-start border border-gray-100">
+                    <div>
+                        <!-- NEW: Star Rating UI (Hidden until Delivered) -->
+                        <div id="customer-rating-ui" class="hidden mb-2">
+                            <p id="rating-prompt-text" class="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-1">Rate Delivery</p>
+                            <div class="flex gap-1" id="star-rating-container">
+                                <i class="ph-fill ph-star text-gray-300 text-2xl transition-colors star-btn" data-value="1"></i>
+                                <i class="ph-fill ph-star text-gray-300 text-2xl transition-colors star-btn" data-value="2"></i>
+                                <i class="ph-fill ph-star text-gray-300 text-2xl transition-colors star-btn" data-value="3"></i>
+                                <i class="ph-fill ph-star text-gray-300 text-2xl transition-colors star-btn" data-value="4"></i>
+                                <i class="ph-fill ph-star text-gray-300 text-2xl transition-colors star-btn" data-value="5"></i>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center gap-1.5 mb-0.5">
+                            <span class="relative flex h-2 w-2" id="status-ping">
+                                <span id="status-ping-dot1" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span id="status-ping-dot2" class="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+                            </span>
+                            <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider" id="delivery-status-text">Loading Status...</p>
+                        </div>
+                        <h4 class="font-bold flex items-baseline gap-1 mt-1">
+                            <span id="customer-name-display" class="text-gray-900 text-base">Waiting...</span>
+                        </h4>
+                    </div>
+                    <div class="text-right mt-1">
+                        <p class="text-[10px] text-gray-500 font-bold uppercase tracking-wider mb-0.5">Customer ID</p>
+                        <span id="bottom-order-id" class="bg-blue-100 text-blue-700 text-xs font-bold px-2 py-0.5 rounded-md">#---</span>
+                    </div>
+                </div>
+
+                <!-- Section 2: Driver Details -->
+                <div class="bg-white rounded-2xl p-3 flex items-center gap-3 border border-gray-100 shadow-sm min-h-[88px]">
+                    <div id="initials-box" class="w-8 h-14 bg-blue-600 text-white rounded-lg flex flex-col items-center justify-center gap-1 text-[12px] font-black leading-none shrink-0">
+                        <span id="initial-1">-</span>
+                        <span id="initial-2">-</span>
+                    </div>
+
+                    <div class="flex-1 flex items-center justify-between min-w-0">
+                        <div class="flex items-center gap-6 h-14">
+                            <div class="flex flex-col justify-center h-full">
+                                <p class="text-[10px] text-gray-400 font-bold uppercase tracking-wider leading-none mb-1">Delivery Partner</p>
+                                <h3 id="driver-name-display" class="text-gray-900 font-bold text-base whitespace-nowrap leading-none">Loading...</h3>
+                                
+                                <!-- Added Rating below name -->
+                                <div class="flex items-center gap-1 mt-1.5 hidden" id="driver-rating-container">
+                                    <i class="ph-fill ph-star text-amber-400 text-[11px]"></i>
+                                    <span id="driver-rating-val" class="text-[11px] font-bold text-gray-700 leading-none">4.9</span>
+                                    <span id="driver-rating-count" class="text-[10px] font-bold text-gray-400 leading-none">(124)</span>
+                                </div>
+                            </div>
+                            <a id="driver-call-btn" href="#" class="w-14 h-14 bg-green-500 text-white rounded-full flex items-center justify-center shadow-md shrink-0 transition hover:bg-green-600 active:scale-95">
+                                <i class="ph-fill ph-phone-call text-2xl"></i>
+                            </a>
+                        </div>
+
+                        <button class="flex flex-col items-center justify-center leading-none text-red-600 border-l border-gray-100 pl-3 py-1 animate-slow-blink">
+                            <span id="assigned-count-display" class="text-3xl font-black">0</span>
+                            <span class="text-[10px] font-black uppercase tracking-tighter">delivery</span>
+                            <span class="text-[10px] font-black uppercase tracking-tighter">assigned</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, collection, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getDatabase, ref as rtdbRef, onValue as rtdbOnValue } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyChCQIDBXdtEoJZPBrJxDQWB8bVobZiBRQ",
+            authDomain: "gurudeliverysystem.firebaseapp.com",
+            databaseURL: "https://gurudeliverysystem-default-rtdb.firebaseio.com",
+            projectId: "gurudeliverysystem",
+            storageBucket: "gurudeliverysystem.firebasestorage.app",
+            messagingSenderId: "197900697167",
+            appId: "1:197900697167:web:210d24d7e61f70360bb43a",
+            measurementId: "G-W19WCFKBFG"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const rtdb = getDatabase(app);
+        const appId = "gurudeliverysystem-prod";
+
+        // URL Parsing logic
+        const params = new URLSearchParams(window.location.search);
+        const rawDriverParam = params.get('driver');
+        let driverNameParam = 'Unknown Driver';
+        let targetCustId = params.get('custId'); 
+
+        if (rawDriverParam) {
+            const decoded = decodeURIComponent(rawDriverParam);
+            if (decoded.includes('/')) {
+                const parts = decoded.split('/');
+                driverNameParam = parts[0];
+                targetCustId = parts[1];
+            } else {
+                driverNameParam = decoded;
+            }
+        }
+        
+        const searchDriverName = driverNameParam.trim().toLowerCase();
+
+        // Global State for Routing and Zooming
+        let lastDriverLatLng = null;
+        let targetCustomerLatLng = null;
+        let routingControl = null;
+        let isInitialZoomDone = false; 
+        
+        // Rating State
+        let activeDeliveryDocId = null;
+        let hasRated = false;
+
+        // Map Setup
+        const map = L.map('map', { zoomControl: false }).setView([22.7196, 75.8577], 13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png').addTo(map);
+        
+        // Professional clean icons 
+        const deliveryIcon = L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div class="delivery-marker"><i class="ph-bold ph-moped text-[28px]"></i></div>`,
+            iconSize: [28, 28], iconAnchor: [14, 14]
+        });
+        const driverMarker = L.marker([22.7196, 75.8577], { icon: deliveryIcon }).addTo(map);
+
+        const customerIcon = L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div class="customer-marker"><i class="ph-fill ph-house text-[18px]"></i></div>`,
+            iconSize: [18, 18], iconAnchor: [9, 9]
+        });
+        let customerMarker = null;
+
+        // Set initial driver data display
+        const parts = driverNameParam.trim().split(/\s+/);
+        document.getElementById('driver-name-display').innerText = driverNameParam;
+        document.getElementById('initial-1').innerText = parts[0] ? parts[0][0].toUpperCase() : "-";
+        document.getElementById('initial-2').innerText = parts[1] ? parts[1][0].toUpperCase() : (parts[0] && parts[0].length > 1 ? parts[0][1].toUpperCase() : "-");
+
+        // --- Core Location Logic (Browser Permission) ---
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition((position) => {
+                const latlng = L.latLng(position.coords.latitude, position.coords.longitude);
+                targetCustomerLatLng = latlng;
+                
+                if (!customerMarker) {
+                    customerMarker = L.marker(latlng, { icon: customerIcon }).addTo(map);
+                } else {
+                    customerMarker.setLatLng(latlng);
+                }
+                updateRoute();
+            }, (error) => {
+                console.log("Customer denied location access or it is unavailable.", error);
+            }, { enableHighAccuracy: true });
+        }
+
+        function updateRoute() {
+            if (!targetCustomerLatLng || !lastDriverLatLng) return;
+
+            if (!routingControl) {
+                // First time generating the route (Hidden Line)
+                routingControl = L.Routing.control({
+                    waypoints: [lastDriverLatLng, targetCustomerLatLng],
+                    createMarker: function() { return null; }, // Hide default routing markers
+                    routeWhileDragging: false,
+                    addWaypoints: false,
+                    fitSelectedRoutes: false, // Prevent map from jumping wildly, we handle zoom manually
+                    showAlternatives: false,
+                    lineOptions: { 
+                        styles: [{ opacity: 0, weight: 0 }] // Completely hides the blue line
+                    }
+                }).addTo(map);
+
+                // Listen for route calculation to update ETA
+                routingControl.on('routesfound', function(e) {
+                    const routes = e.routes;
+                    const summary = routes[0].summary;
+                    const mins = Math.max(1, Math.round(summary.totalTime / 60));
+                    const distKm = (summary.totalDistance / 1000).toFixed(1);
+
+                    const statusTextEl = document.getElementById('delivery-status-text');
+                    // Only update ETA if they are currently Out for Delivery
+                    if (statusTextEl.innerText.includes("Out for Delivery") || statusTextEl.innerText.includes("Arriving")) {
+                        statusTextEl.innerText = `Arriving in ~${mins} min (${distKm} km)`;
+                    }
+
+                    // Perform initial fit bounds to show both driver and customer when route starts
+                    if (!isInitialZoomDone) {
+                        const bounds = L.latLngBounds([lastDriverLatLng, targetCustomerLatLng]);
+                        map.fitBounds(bounds, { padding: [60, 60], animate: true, maxZoom: 16 });
+                        isInitialZoomDone = true;
+                    }
+                });
+            } else {
+                // Route already exists, just update the waypoints as the driver/customer moves to refresh ETA
+                routingControl.setWaypoints([lastDriverLatLng, targetCustomerLatLng]);
+            }
+        }
+
+        // --- Firebase Connection ---
+        signInAnonymously(auth).then(() => {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    document.getElementById('authStatus').textContent = "Live";
+
+                    // 1. Get Driver Phone & Rating
+                    onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'drivers'), (snap) => {
+                        const drivers = snap.docs.map(d => d.data());
+                        const driverObj = drivers.find(d => d.name?.trim().toLowerCase() === searchDriverName);
+                        if (driverObj) {
+                            if (driverObj.phone) {
+                                document.getElementById('driver-call-btn').href = `tel:+91${driverObj.phone}`;
+                            }
+                            // Show Rating below driver name
+                            document.getElementById('driver-rating-container').classList.remove('hidden');
+                            document.getElementById('driver-rating-val').innerText = driverObj.rating || '4.9';
+                            document.getElementById('driver-rating-count').innerText = `(${driverObj.reviews || Math.floor(Math.random() * 200) + 50})`;
+                        }
+                    });
+
+                    // 2. Listen to active delivery tasks
+                    onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'deliveries'), async (snap) => {
+                        // Include the document ID so we can save the rating back to it
+                        const allDeliveries = snap.docs.map(d => ({...d.data(), _docId: d.id}));
+                        const driverTasks = allDeliveries.filter(d => d.driverName && d.driverName.trim().toLowerCase() === searchDriverName);
+                        const today = new Date().toISOString().split('T')[0];
+                        
+                        const remainingTasks = driverTasks.filter(d => d.date === today && (d.status === 'pending' || d.status === 'in-transit')).length;
+                        document.getElementById('assigned-count-display').innerText = remainingTasks;
+
+                        let displayTask = null;
+
+                        if (targetCustId) {
+                            const targetSearch = targetCustId.trim().toLowerCase();
+                            const customerTasks = driverTasks.filter(d => 
+                                d.date === today &&
+                                ((d.customerId && d.customerId.trim().toLowerCase() === targetSearch) || 
+                                (d.id && d.id.trim().toLowerCase() === targetSearch))
+                            ).sort((a, b) => new Date(b.date) - new Date(a.date));
+                            if(customerTasks.length > 0) displayTask = customerTasks[0];
+                        } else {
+                            displayTask = driverTasks.find(d => d.date === today && d.status === 'in-transit');
+                        }
+
+                        const statusTextEl = document.getElementById('delivery-status-text');
+                        const statusPing = document.getElementById('status-ping');
+                        const pingDot1 = document.getElementById('status-ping-dot1');
+                        const pingDot2 = document.getElementById('status-ping-dot2');
+                        const ratingUi = document.getElementById('customer-rating-ui');
+                        const stars = document.querySelectorAll('.star-btn');
+
+                        if (displayTask) {
+                            document.getElementById('customer-name-display').innerText = displayTask.customerName || "Customer";
+                            document.getElementById('bottom-order-id').innerText = `#${displayTask.customerId || displayTask.id || '---'}`;
+                            
+                            activeDeliveryDocId = displayTask._docId;
+                            hasRated = !!displayTask.rating;
+
+                            if (displayTask.status === 'delivered') {
+                                let timeStr = "";
+                                if (displayTask.deliveryTime) {
+                                    const dTime = new Date(displayTask.deliveryTime);
+                                    timeStr = ` (${dTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})})`;
+                                }
+                                statusTextEl.innerText = `Order Delivered 🎉${timeStr}`;
+                                statusTextEl.className = "text-[10px] text-emerald-600 font-bold uppercase tracking-wider";
+                                statusPing.style.display = 'none';
+                                if(routingControl) { map.removeControl(routingControl); routingControl = null; } 
+
+                                // SHOW RATING UI
+                                ratingUi.classList.remove('hidden');
+                                if (hasRated) {
+                                    stars.forEach(s => {
+                                        if (parseInt(s.dataset.value) <= displayTask.rating) {
+                                            s.classList.replace('text-gray-300', 'text-amber-400');
+                                        } else {
+                                            s.classList.replace('text-amber-400', 'text-gray-300');
+                                        }
+                                        s.classList.remove('cursor-pointer', 'hover:text-amber-400');
+                                    });
+                                    document.getElementById('rating-prompt-text').innerText = "Thanks for rating!";
+                                } else {
+                                    stars.forEach(s => {
+                                        s.classList.replace('text-amber-400', 'text-gray-300');
+                                        s.classList.add('cursor-pointer', 'hover:text-amber-400');
+                                    });
+                                    document.getElementById('rating-prompt-text').innerText = "Rate your delivery";
+                                }
+
+                            } else if (displayTask.status === 'in-transit') {
+                                statusTextEl.innerText = "Out for Delivery"; 
+                                statusTextEl.className = "text-[10px] text-orange-500 font-bold uppercase tracking-wider";
+                                statusPing.style.display = 'flex';
+                                pingDot1.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75";
+                                pingDot2.className = "relative inline-flex rounded-full h-2 w-2 bg-orange-500";
+                                ratingUi.classList.add('hidden'); // Hide rating
+                            } else {
+                                statusTextEl.innerText = "Waiting for Pickup";
+                                statusTextEl.className = "text-[10px] text-blue-600 font-bold uppercase tracking-wider";
+                                statusPing.style.display = 'flex';
+                                pingDot1.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75";
+                                pingDot2.className = "relative inline-flex rounded-full h-2 w-2 bg-blue-500";
+                                if(routingControl) { map.removeControl(routingControl); routingControl = null; }
+                                ratingUi.classList.add('hidden'); // Hide rating
+                            }
+                        } else {
+                            document.getElementById('customer-name-display').innerText = targetCustId ? "No Active Orders Today" : "Waiting for next pickup...";
+                            document.getElementById('bottom-order-id').innerText = `#---`;
+                            statusTextEl.innerText = targetCustId ? "Check ID" : "On the Move";
+                            statusTextEl.className = "text-[10px] text-gray-500 font-bold uppercase tracking-wider";
+                            statusPing.style.display = 'none';
+                            ratingUi.classList.add('hidden'); // Hide rating
+                            if(routingControl) { map.removeControl(routingControl); routingControl = null; }
+                        }
+                    });
+
+                    // 3. Listen to the GPS Logger
+                    const locationRef = rtdbRef(rtdb, 'driver_locations/' + driverNameParam);
+                    rtdbOnValue(locationRef, (snap) => {
+                        if (snap.exists()) {
+                            const data = snap.val();
+                            const lat = data.lat || data.latitude || data.latm;
+                            const lng = data.lng || data.longitude || data.lon;
+
+                            if (lat && lng) {
+                                lastDriverLatLng = L.latLng(lat, lng);
+                                driverMarker.setLatLng(lastDriverLatLng);
+                                
+                                // Recalculate ETA silently
+                                updateRoute();
+
+                                // SMART ZOOM LOGIC: If customer hasn't shared location, focus tightly on driver
+                                if (!routingControl) {
+                                    if (!isInitialZoomDone) {
+                                        map.setView(lastDriverLatLng, 16, { animate: true }); // Tightly focus on the bike initially
+                                        isInitialZoomDone = true;
+                                    } else {
+                                        map.panTo(lastDriverLatLng, { animate: true }); // Smoothly follow the bike
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+        });
+
+        // Handle Interactive Star Rating Clicks
+        document.querySelectorAll('.star-btn').forEach(star => {
+            star.addEventListener('click', async (e) => {
+                if (hasRated || !activeDeliveryDocId) return; // Prevent multiple votes
+                
+                const ratingValue = parseInt(e.target.dataset.value);
+                hasRated = true;
+
+                // Instantly update UI for responsiveness
+                document.querySelectorAll('.star-btn').forEach(s => {
+                    if (parseInt(s.dataset.value) <= ratingValue) {
+                        s.classList.replace('text-gray-300', 'text-amber-400');
+                    }
+                    s.classList.remove('cursor-pointer', 'hover:text-amber-400');
+                });
+                document.getElementById('rating-prompt-text').innerText = "Thanks for rating!";
+
+                // Save rating to Firestore Document
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'deliveries', activeDeliveryDocId);
+                    await updateDoc(docRef, { rating: ratingValue });
+                } catch(error) {
+                    console.error("Error saving rating: ", error);
+                }
+            });
+        });
+
+        // Manual centering button 
+        document.getElementById('instant-refresh-btn').addEventListener('click', () => {
+            const icon = document.getElementById('refresh-icon');
+            icon.classList.add('spinning');
+            
+            // Always center and zoom tightly on the driver's location
+            if (lastDriverLatLng) {
+                map.setView(lastDriverLatLng, 16, { animate: true }); 
+            }
+            
+            setTimeout(() => icon.classList.remove('spinning'), 800);
+        });
+    </script>
+</body>
+</html>
